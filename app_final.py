@@ -11,7 +11,7 @@ import json
 from io import StringIO
 import time
 
-DATA_PATH = "https://drive.google.com/uc?export=download&id=1tO9yA928YDrxCaDXIGB9Hdf1DfWsLzCb"
+DATA_PATH = "https://www.dropbox.com/scl/fi/7waxvqzhzlizujd5j5mbg/df_joined.csv?rlkey=y9hnjj2twmm5yjsivj2j3x5aa&st=uw56be8b&dl=1"
 
 @lru_cache(maxsize=1)
 def load_data():
