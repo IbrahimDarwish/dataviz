@@ -17,7 +17,7 @@ import sys # Added for visible error logging
 
 # NOTE: UPDATE THIS PATH with the direct download URL of your 'df_optimized.parquet' file
 # This URL should point to the file created after local optimization.
-DATA_PATH = "YOUR_PARQUET_FILE_DIRECT_DOWNLOAD_URL_HERE"
+DATA_PATH = "https://www.dropbox.com/scl/fi/7xr2u9y57jdlk6jbu63m4/df_optimized_final.parquet?rlkey=eqcg33vabg722383b7p306xtn&st=xm4ljcjo&dl=1"
 
 # --- 1. FULL DATA LOADER (Called ONLY on "Generate Report" click) ---
 @lru_cache(maxsize=1)
