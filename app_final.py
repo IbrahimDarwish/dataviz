@@ -16,7 +16,7 @@ import sys # Added for visible error logging
 # ============================================================
 
 # Replace with your confirmed, direct Google Drive/Dropbox download link.
-DATA_PATH = "https://www.dropbox.com/scl/fi/7waxvqzhzlizujd5j5mbg/df_joined.csv?rlkey=y9hnjj2twmm5yjsivj2j3x5aa&st=uw56be8b&dl=1" 
+DATA_PATH = "https://www.dropbox.com/scl/fi/3fi7m2lvixz3lqr895plh/df_joined_optimized.csv.gz?rlkey=lra2omrwxgxsuvorsftm53b55&st=y8jwgoed&dl=1" 
 # --- 1. FULL DATA LOADER (Called ONLY on "Generate Report" click) ---
 @lru_cache(maxsize=1)
 def load_full_data():
