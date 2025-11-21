@@ -11,16 +11,16 @@ import json
 from io import StringIO
 import time
 
-
-
-DATA_PATH = "df_joined.csv"
+DATA_PATH = "https://drive.google.com/uc?export=download&id=1tO9yA928YDrxCaDXIGB9Hdf1DfWsLzCb"
 
 @lru_cache(maxsize=1)
 def load_data():
-    if not os.path.exists(DATA_PATH):
-        raise FileNotFoundError(f"'{DATA_PATH}' not found. Please upload this file to Colab.")
-    return pd.read_csv(DATA_PATH, low_memory=False)
-
+    try:
+        return pd.read_csv(DATA_PATH, low_memory=False)
+    except Exception as e:
+        print(f"Error loading remote data from {DATA_PATH}: {e}")
+        raise FileNotFoundError("Could not load data from remote URL.")
+        
 @lru_cache(maxsize=1)
 def load_metadata():
     try:
