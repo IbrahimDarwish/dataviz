@@ -14,11 +14,9 @@ import sys
 
 DATA_PATH = "https://www.dropbox.com/scl/fi/7waxvqzhzlizujd5j5mbg/df_joined.csv?rlkey=y9hnjj2twmm5yjsivj2j3x5aa&st=uw56be8b&dl=1"
 
---- 1. FULL DATA LOADER (Called ONLY on button click) ---
 # This is slow (450s timeout needed) and memory-intensive (1GB RAM needed).
 @lru_cache(maxsize=1)
 def load_full_data():
-    """Loads the entire 1GB CSV file into memory."""
     try:
         # pd.read_csv handles loading from the web URL
         df = pd.read_csv(DATA_PATH, low_memory=False)
@@ -35,7 +33,6 @@ def load_full_data():
 # --- 2. METADATA LOADER (Called on startup for dropdowns - uses chunking to save RAM) ---
 @lru_cache(maxsize=1)
 def load_metadata():
-    """Loads a small chunk of data to extract metadata for dropdowns."""
     try:
         # Read only the first 1000 rows (or whatever is needed) to get column values.
         # This prevents the 1GB file from being loaded into memory on startup (OOM fix).
