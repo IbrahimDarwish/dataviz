@@ -12,7 +12,7 @@ import time
 import sys # Added for visible error logging
 
 # ============================================================
-#               UTILITIES & DATA LOADING (FIXED for OCI/RAM)
+#               UTILITIES & DATA LOADING (FIXED for GZIP)
 # ============================================================
 
 # NOTE: This link must be a direct download link for the compressed file
@@ -21,9 +21,9 @@ DATA_PATH = "https://www.dropbox.com/scl/fi/3fi7m2lvixz3lqr895plh/df_joined_opti
 # --- 1. FULL DATA LOADER (Called ONLY on "Generate Report" click) ---
 @lru_cache(maxsize=1)
 def load_full_data():
-    """Loads the entire optimized file into memory (Safe on 4GB VM)."""
+    """Loads the entire optimized file into memory."""
     try:
-        # Explicitly set compression to 'gzip' to handle the file type correctly
+        # FIX: Explicitly set compression to 'gzip'
         df = pd.read_csv(DATA_PATH, low_memory=False, compression='gzip')
         print("Full data loaded successfully from remote URL.", file=sys.stderr, flush=True)
         return df
@@ -39,10 +39,11 @@ def load_full_data():
 def load_metadata():
     """Loads a tiny chunk of data to extract metadata for dropdowns."""
     try:
-        # Use chunksize=10 AND explicitly set compression='gzip'
+        # FIX: Use chunksize=10 AND explicitly set compression='gzip'
         reader = pd.read_csv(DATA_PATH, chunksize=10, low_memory=False, compression='gzip')
         df_meta = next(reader)
     except Exception as e:
+        # If this fails, it's likely a network or URL error
         print(f"Error reading initial chunk for metadata: {e}", file=sys.stderr, flush=True)
         # Return empty lists on failure so the app still loads the layout
         return {
