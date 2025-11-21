@@ -12,20 +12,19 @@ import time
 import sys # Added for visible error logging
 
 # ============================================================
-#               UTILITIES & DATA LOADING (FIXED for CSV)
+#               UTILITIES & DATA LOADING (FIXED for PARQUET)
 # ============================================================
 
-# NOTE: This link must be a direct download link for the UNCOMPRESSED CSV file
-# The URL must be updated to point to the non-compressed CSV file.
-DATA_PATH = "https://www.dropbox.com/scl/fi/7waxvqzhzlizujd5j5mbg/df_joined.csv?rlkey=y9hnjj2twmm5yjsivj2j3x5aa&st=3x9blpkt&dl=1"
+# NOTE: UPDATE THIS PATH with the direct download URL of your 'df_optimized.parquet' file
+DATA_PATH = "https://www.dropbox.com/scl/fi/7xr2u9y57jdlk6jbu63m4/df_optimized_final.parquet?rlkey=eqcg33vabg722383b7p306xtn&st=xm4ljcjo&dl=1"
 
 # --- 1. FULL DATA LOADER (Called ONLY on "Generate Report" click) ---
 @lru_cache(maxsize=1)
 def load_full_data():
-    """Loads the entire uncompressed file into memory."""
+    """Loads the entire optimized Parquet file into memory."""
     try:
-        # FIX: Removed compression='gzip'
-        df = pd.read_csv(DATA_PATH, low_memory=False) 
+        # FIX: Use pd.read_parquet()
+        df = pd.read_parquet(DATA_PATH) 
         print("Full data loaded successfully from remote URL.", file=sys.stderr, flush=True)
         return df
     except Exception as e:
@@ -35,18 +34,17 @@ def load_full_data():
         print(f"--------------------------", file=sys.stderr, flush=True)
         raise FileNotFoundError("Could not load full data from remote URL.")
 
-# --- 2. METADATA LOADER (Called on startup for dropdowns - OOM FIX via chunking) ---
+# --- 2. METADATA LOADER (Called on startup for dropdowns - OOM FIX) ---
 @lru_cache(maxsize=1)
 def load_metadata():
-    """Loads a tiny chunk of data to extract metadata for dropdowns."""
+    """Loads a tiny portion of data to extract metadata for dropdowns."""
     try:
-        # FIX: Removed compression='gzip'
-        # Chunking is still used for memory safety during startup
-        reader = pd.read_csv(DATA_PATH, chunksize=10, low_memory=False) 
-        df_meta = next(reader)
+        # FIX: Use pd.read_parquet() with nrows=10 for minimal startup load
+        # nrows is the memory-safe way to get the first rows of a Parquet file.
+        df_meta = pd.read_parquet(DATA_PATH, nrows=10) 
     except Exception as e:
-        # If this fails, it's likely a network or URL error
-        print(f"Error reading initial chunk for metadata: {e}", file=sys.stderr, flush=True)
+        # If this fails, it means the app can't access the Parquet file
+        print(f"Error reading initial metadata chunk (Parquet): {e}", file=sys.stderr, flush=True)
         # Return empty lists on failure so the app still loads the layout
         return {
             "boroughs": [], "years": [], "vehicle_types": [],
