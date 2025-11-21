@@ -10,34 +10,54 @@ import os
 import json
 from io import StringIO
 import time
+import sys
 
 DATA_PATH = "https://www.dropbox.com/scl/fi/7waxvqzhzlizujd5j5mbg/df_joined.csv?rlkey=y9hnjj2twmm5yjsivj2j3x5aa&st=uw56be8b&dl=1"
 
+--- 1. FULL DATA LOADER (Called ONLY on button click) ---
+# This is slow (450s timeout needed) and memory-intensive (1GB RAM needed).
 @lru_cache(maxsize=1)
-def load_data():
+def load_full_data():
+    """Loads the entire 1GB CSV file into memory."""
     try:
-        return pd.read_csv(DATA_PATH, low_memory=False)
+        # pd.read_csv handles loading from the web URL
+        df = pd.read_csv(DATA_PATH, low_memory=False)
+        # Log success (optional, but useful)
+        print("Data loaded successfully from remote URL.", file=sys.stderr, flush=True)
+        return df
     except Exception as e:
-        print(f"Error loading remote data from {DATA_PATH}: {e}")
-        raise FileNotFoundError("Could not load data from remote URL.")
-        
+        # Log the failure clearly to the Render console
+        print(f"--- FULL DATA LOAD FAILED ---", file=sys.stderr, flush=True)
+        print(f"Error loading full data: {e}", file=sys.stderr, flush=True)
+        print(f"--------------------------", file=sys.stderr, flush=True)
+        raise FileNotFoundError("Could not load full data from remote URL.")
+
+# --- 2. METADATA LOADER (Called on startup for dropdowns - uses chunking to save RAM) ---
 @lru_cache(maxsize=1)
 def load_metadata():
+    """Loads a small chunk of data to extract metadata for dropdowns."""
     try:
-        df = load_data()
-    except FileNotFoundError:
+        # Read only the first 1000 rows (or whatever is needed) to get column values.
+        # This prevents the 1GB file from being loaded into memory on startup (OOM fix).
+        reader = pd.read_csv(DATA_PATH, chunksize=1000, low_memory=False)
+        df_meta = next(reader)
+    except Exception as e:
+        print(f"Error reading initial chunk for metadata: {e}", file=sys.stderr, flush=True)
         return {
             "boroughs": [], "years": [], "vehicle_types": [],
             "factors": [], "injuries": []
         }
 
-    df = load_data()
-    # Ensure all columns exist before accessing them
-    boroughs = sorted(df["BOROUGH"].dropna().unique().tolist()) if "BOROUGH" in df else []
-    years = sorted(pd.to_datetime(df["CRASH_DATE"], errors="coerce").dt.year.dropna().astype(int).unique().tolist()) if "CRASH_DATE" in df else []
-    vehicle = sorted(df["VEHICLE TYPE CODE 1"].dropna().unique().tolist()) if "VEHICLE TYPE CODE 1" in df else []
-    factors = sorted(df["CONTRIBUTING FACTOR VEHICLE 1"].dropna().unique().tolist()) if "CONTRIBUTING FACTOR VEHICLE 1" in df else []
-    injuries = sorted(df["PERSON_INJURY"].dropna().unique().tolist()) if "PERSON_INJURY" in df else []
+    # Use the small chunk (df_meta) to populate all dropdowns
+    boroughs = sorted(df_meta["BOROUGH"].dropna().unique().tolist()) if "BOROUGH" in df_meta else []
+    
+    # CRASH_DATE requires full range, but we approximate with the available data from the chunk
+    # (If the chunk is too small, you might miss a year, but it fixes OOM)
+    years = sorted(pd.to_datetime(df_meta["CRASH_DATE"], errors="coerce").dt.year.dropna().astype(int).unique().tolist()) if "CRASH_DATE" in df_meta else []
+    
+    vehicle = sorted(df_meta["VEHICLE TYPE CODE 1"].dropna().unique().tolist()) if "VEHICLE TYPE CODE 1" in df_meta else []
+    factors = sorted(df_meta["CONTRIBUTING FACTOR VEHICLE 1"].dropna().unique().tolist()) if "CONTRIBUTING FACTOR VEHICLE 1" in df_meta else []
+    injuries = sorted(df_meta["PERSON_INJURY"].dropna().unique().tolist()) if "PERSON_INJURY" in df_meta else []
 
     return {
         "boroughs": boroughs,
@@ -50,26 +70,26 @@ def load_metadata():
 def parse_search_query(search_query, metadata):
     """Parses a natural language query and extracts filter values."""
     if not search_query or not search_query.strip():
-        return None
+        return None 
 
     s = search_query.lower()
     parsed_filters = {
         "boroughs": [], "years": [], "injuries": []
     }
-
+    
     # 1. Boroughs
     for b in metadata["boroughs"]:
         if b.lower() in s:
             parsed_filters["boroughs"].append(b)
-
+            
     # 2. Years
     for year in metadata["years"]:
         if str(year) in s:
             parsed_filters["years"].append(year)
-
+            
     # 3. Injuries (PERSON_INJURY)
     injury_keywords = {
-        "pedestrian": ["PEDESTRIAN"],
+        "pedestrian": ["PEDESTRIAN"], 
         "cyclist": ["BICYCLIST"],
         "motorist": ["PASSENGER", "DRIVER"],
         "killed": ["KILLED"],
@@ -80,7 +100,7 @@ def parse_search_query(search_query, metadata):
             for val in values:
                 if val in metadata["injuries"]:
                     parsed_filters["injuries"].append(val)
-
+    
     if any(parsed_filters.values()):
         return parsed_filters
     return None
@@ -110,153 +130,153 @@ def df_to_json(df):
 def json_to_df(js):
     return pd.read_json(StringIO(js), orient="split")
 
+
 # ============================================================
-# APP + LAYOUT (Final Look)
+#               APP + LAYOUT 
 # ============================================================
 
 meta = load_metadata()
 
 # Using SLATE theme for dark mode compatibility
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.SLATE])
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.SLATE]) 
 server = app.server
 
 # Custom index string for dropdown visibility fix
-# (Ensures dropdown text is readable in the dark theme)
 app.index_string = '''
 <!DOCTYPE html>
 <html>
-<head>
-{%metas%}
-<title>{%title%}</title>
-{%favicon%}
-{%css%}
-<style>
-/* Custom CSS to fix dropdown text color for dark themes */
-.Select-control,
-.Select-option,
-.Select-value-label,
-.Select-input,
-.Select--single > .Select-control .Select-placeholder {
-color: black !important;
-}
-.Select--multi .Select-value {
-background-color: #f8f9fa !important;
-color: black !important;
-}
-.Select--multi .Select-value-icon {
-color: black !important;
-}
-</style>
-</head>
-<body>
-<div id="react-entry-point">
-<div class="_dash-app-content">
-{%app_entry%}
-</div>
-</div>
-<footer>
-{%config%}
-{%scripts%}
-{%renderer%}
-</footer>
-</body>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+        <style>
+            /* Custom CSS to fix dropdown text color for dark themes */
+            .Select-control,
+            .Select-option,
+            .Select-value-label, 
+            .Select-input, 
+            .Select--single > .Select-control .Select-placeholder {
+                color: black !important;
+            }
+            .Select--multi .Select-value {
+                background-color: #f8f9fa !important;
+                color: black !important;
+            }
+            .Select--multi .Select-value-icon {
+                color: black !important;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="react-entry-point">
+            <div class="_dash-app-content">
+                {%app_entry%} 
+            </div>
+        </div>
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
 </html>
 '''
 
 app.layout = dbc.Container([
-# ------------------ HEADER ROW ------------------
-dbc.Row(className="mb-4 pt-4", style={'border-bottom': '1px solid #444'}, children=[
-dbc.Col(
-html.H1(
-[html.I(className="bi bi-car-front-fill me-3"), "NYC Collision Report"],
-className="text-info display-4"
-),
-width=9
-),
-dbc.Col(
-html.Div(id="last-updated", className="text-secondary"),
-width=3,
-className="d-flex align-items-end justify-content-end"
-)
-]),
+    # ------------------ HEADER ROW ------------------
+    dbc.Row(className="mb-4 pt-4", style={'border-bottom': '1px solid #444'}, children=[
+        dbc.Col(
+            html.H1(
+                [html.I(className="bi bi-car-front-fill me-3"), "NYC Collision Report"], 
+                className="text-info display-4" 
+            ), 
+            width=9
+        ),
+        dbc.Col(
+            html.Div(id="last-updated", className="text-secondary"), 
+            width=3, 
+            className="d-flex align-items-end justify-content-end"
+        )
+    ]),
 
-dbc.Row([
-# --- FILTERS (Sidebar) ---
-dbc.Col(
-dbc.Card(
-dbc.CardBody([
-html.H4("Filter Controls", className="card-title text-warning mb-4"),
+    dbc.Row([
+        # --- FILTERS (Sidebar) ---
+        dbc.Col(
+            dbc.Card(
+                dbc.CardBody([
+                    html.H4("Filter Controls", className="card-title text-warning mb-4"),
+                    
+                    # Consolidated Dropdowns into a cleaner layout
+                    dbc.Label("Borough", className="mt-2"),
+                    dcc.Dropdown(id="borough", options=[{"label": b, "value": b} for b in meta["boroughs"]], multi=True, value=[], className="mb-3"),
 
-# Dropdowns
-dbc.Label("Borough", className="mt-2"),
-dcc.Dropdown(id="borough", options=[{"label": b, "value": b} for b in meta["boroughs"]], multi=True, value=[], className="mb-3"),
+                    dbc.Label("Year"),
+                    dcc.Dropdown(id="year", options=[{"label": y, "value": y} for y in meta["years"]], multi=True, value=[], className="mb-3"),
 
-dbc.Label("Year"),
-dcc.Dropdown(id="year", options=[{"label": y, "value": y} for y in meta["years"]], multi=True, value=[], className="mb-3"),
+                    dbc.Label("Vehicle Type"),
+                    dcc.Dropdown(id="vehicle", options=[{"label": v, "value": v} for v in meta["vehicle_types"]], multi=True, value=[], className="mb-3"),
 
-dbc.Label("Vehicle Type"),
-dcc.Dropdown(id="vehicle", options=[{"label": v, "value": v} for v in meta["vehicle_types"]], multi=True, value=[], className="mb-3"),
+                    dbc.Label("Contributing Factor"),
+                    dcc.Dropdown(id="factor", options=[{"label": f, "value": f} for f in meta["factors"]], multi=True, value=[], className="mb-3"),
 
-dbc.Label("Contributing Factor"),
-dcc.Dropdown(id="factor", options=[{"label": f, "value": f} for f in meta["factors"]], multi=True, value=[], className="mb-3"),
+                    dbc.Label("Person Injury Type"), 
+                    dcc.Dropdown(id="injury", options=[{"label": i, "value": i} for i in meta["injuries"]], multi=True, value=[], className="mb-4"),
 
-dbc.Label("Person Injury Type"),
-dcc.Dropdown(id="injury", options=[{"label": i, "value": i} for i in meta["injuries"]], multi=True, value=[], className="mb-4"),
+                    html.H5("Search & Actions", className="text-info mb-3"),
+                    dbc.Label("Search Keywords"), 
+                    dcc.Input(id="search", type="text", style={"width": "100%"}, placeholder="e.g., Manhattan 2023 cyclist...", className="mb-4"),
 
-html.H5("Search & Actions", className="text-info mb-3"),
-dbc.Label("Search Keywords"),
-dcc.Input(id="search", type="text", style={"width": "100%"}, placeholder="e.g., Manhattan 2023 cyclist...", className="mb-4"),
+                    # Buttons grouped together
+                    dbc.Row([
+                        dbc.Col(
+                            dbc.Button("Generate Report", id="generate", color="success", className="w-100"), 
+                            width=8
+                        ),
+                        dbc.Col(
+                            dbc.Button("Reset", id="reset", color="danger", className="w-100"), 
+                            width=4
+                        )
+                    ], className="mb-4"),
+                    
+                    dbc.Alert(id="alert", is_open=False, className="mt-3")
+                ]),
+                className="h-100 shadow-lg bg-dark", 
+                style={"min-height": "100vh"}
+            ), 
+            width=3, 
+            className="p-0"
+        ),
 
-# Buttons grouped together
-dbc.Row([
-dbc.Col(
-dbc.Button("Generate Report", id="generate", color="success", className="w-100"),
-width=8
-),
-dbc.Col(
-dbc.Button("Reset", id="reset", color="danger", className="w-100"),
-width=4
-)
-], className="mb-4"),
+        # --- VISUALIZATIONS (Main Content Area) ---
+        dbc.Col(
+            html.Div([
+                # Row 1: Key Charts
+                dbc.Row([
+                    dbc.Col(dbc.Card(dcc.Graph(id="bar"), className="shadow-sm h-100"), width=6, className="mb-4"),
+                    dbc.Col(dbc.Card(dcc.Graph(id="pie"), className="shadow-sm h-100"), width=6, className="mb-4"),
+                ]),
+                # Row 2: Time and Distribution
+                dbc.Row([
+                    dbc.Col(dbc.Card(dcc.Graph(id="line"), className="shadow-sm h-100"), width=6, className="mb-4"),
+                    dbc.Col(dbc.Card(dcc.Graph(id="heat"), className="shadow-sm h-100"), width=6, className="mb-4"),
+                ]),
+                # Row 3: Map
+                dbc.Row([
+                    dbc.Col(dbc.Card(dcc.Graph(id="map", style={'height': '60vh'}), className="shadow-lg"), width=12),
+                ])
+            ], className="p-4 bg-secondary"),
+            width=9,
+            className="p-4"
+        )
+    ], className="g-0"),
 
-dbc.Alert(id="alert", is_open=False, className="mt-3")
-]),
-className="h-100 shadow-lg bg-dark",
-style={"min-height": "100vh"}
-),
-width=3,
-className="p-0"
-),
-
-# --- VISUALIZATIONS (Main Content Area) ---
-dbc.Col(
-html.Div([
-# Row 1: Key Charts
-dbc.Row([
-dbc.Col(dbc.Card(dcc.Graph(id="bar"), className="shadow-sm h-100"), width=6, className="mb-4"),
-dbc.Col(dbc.Card(dcc.Graph(id="pie"), className="shadow-sm h-100"), width=6, className="mb-4"),
-]),
-# Row 2: Time and Distribution
-dbc.Row([
-dbc.Col(dbc.Card(dcc.Graph(id="line"), className="shadow-sm h-100"), width=6, className="mb-4"),
-dbc.Col(dbc.Card(dcc.Graph(id="heat"), className="shadow-sm h-100"), width=6, className="mb-4"),
-]),
-# Row 3: Map
-dbc.Row([
-dbc.Col(dbc.Card(dcc.Graph(id="map", style={'height': '60vh'}), className="shadow-lg"), width=12),
-])
-], className="p-4 bg-secondary"),
-width=9,
-className="p-4"
-)
-], className="g-0"),
-
-# Component to store filtered data temporarily
-dcc.Store(id="store")
+    dcc.Store(id="store")
 ], fluid=True)
 
+
 # ============================================================
-#                       CALLBACKS
+#                       CALLBACKS 
 # ============================================================
 
 # ------------------------------------------------------------
@@ -291,9 +311,9 @@ def reset_all(n_clicks):
     Output("borough", "value"),
     Output("year", "value"),
     Output("injury", "value"),
-
+    
     Input("generate", "n_clicks"),
-
+    
     State("borough", "value"),
     State("year", "value"),
     State("vehicle", "value"),
@@ -321,14 +341,16 @@ def filter_data_and_autofilter(n_generate, boroughs, years, vehicles, factors, i
 
 
     try:
-        df = load_data()
+        # CRUCIAL FIX: Load the full 1GB data ONLY here, inside the callback
+        df = load_full_data()
+        
         filtered = apply_filters(df, final_boroughs, final_years, vehicles, factors, final_injuries)
 
         msg = f"Report generated successfully: *{len(filtered)} records found.*"
-
+        
         return (
-            df_to_json(filtered),
-            msg,
+            df_to_json(filtered), 
+            msg, 
             True,
             final_boroughs,
             final_years,
@@ -357,7 +379,7 @@ def update_graphs(json_data):
         'paper_bgcolor': 'rgba(0,0,0,0)',
         'font': {'color': '#DDD'},
     }
-
+    
     if not json_data:
         # Return empty figures with dark theme layout
         empty = px.scatter(title="No Data Loaded/Filtered")
@@ -365,7 +387,7 @@ def update_graphs(json_data):
         return empty, empty, empty, empty, empty
 
     df = json_to_df(json_data)
-
+    
     # Helper to apply layout
     def create_fig(fig, title):
         fig.update_layout(title_text=title, **transparent_layout)
