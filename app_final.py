@@ -8,8 +8,6 @@ import plotly.express as px
 from functools import lru_cache
 import os
 import json
-from pyngrok import ngrok
-import nest_asyncio
 from io import StringIO
 import time
 
