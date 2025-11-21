@@ -2,4 +2,5 @@
 dash-bootstrap-components
 pandas
 plotly
+pyarrow
 gunicorn
