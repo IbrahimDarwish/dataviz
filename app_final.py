@@ -12,39 +12,39 @@ import time
 import sys # Added for visible error logging
 
 # ============================================================
-#               UTILITIES & DATA LOADING (FIXED for Render)
+#               UTILITIES & DATA LOADING (FIXED for OCI/RAM)
 # ============================================================
 
-# Replace with your confirmed, direct Google Drive/Dropbox download link.
-DATA_PATH = "https://www.dropbox.com/scl/fi/3fi7m2lvixz3lqr895plh/df_joined_optimized.csv.gz?rlkey=lra2omrwxgxsuvorsftm53b55&st=y8jwgoed&dl=1" 
+# NOTE: This link must be a direct download link for the compressed file
+DATA_PATH = "https://www.dropbox.com/scl/fi/3fi7m2lvixz3lqr895plh/df_joined_optimized.csv.gz?rlkey=lra2omrwxgxsuvorsftm53b55&st=y8jwgoed&dl=1"
+
 # --- 1. FULL DATA LOADER (Called ONLY on "Generate Report" click) ---
 @lru_cache(maxsize=1)
 def load_full_data():
-    """Loads the entire 1GB CSV file into memory (This is the slow part)."""
+    """Loads the entire optimized file into memory (Safe on 4GB VM)."""
     try:
-        # pd.read_csv handles loading from the web URL
-        df = pd.read_csv(DATA_PATH, low_memory=False)
+        # Explicitly set compression to 'gzip' to handle the file type correctly
+        df = pd.read_csv(DATA_PATH, low_memory=False, compression='gzip')
         print("Full data loaded successfully from remote URL.", file=sys.stderr, flush=True)
         return df
     except Exception as e:
-        # This error is critical and usually indicates a bad URL or network issue.
+        # Log the critical failure clearly
         print(f"--- FULL DATA LOAD FAILED ---", file=sys.stderr, flush=True)
         print(f"Error loading full data: {e}", file=sys.stderr, flush=True)
         print(f"--------------------------", file=sys.stderr, flush=True)
         raise FileNotFoundError("Could not load full data from remote URL.")
 
-# --- 2. METADATA LOADER (Called on startup for dropdowns - OOM FIX) ---
+# --- 2. METADATA LOADER (Called on startup for dropdowns - OOM FIX via chunking) ---
 @lru_cache(maxsize=1)
 def load_metadata():
-    """Loads a tiny chunk of data to extract metadata for dropdowns, avoiding OOM crash."""
+    """Loads a tiny chunk of data to extract metadata for dropdowns."""
     try:
-        # Use a tiny chunksize (e.g., 10 rows) to get column values 
-        # without loading the 1GB file into RAM during startup.
-        reader = pd.read_csv(DATA_PATH, chunksize=10, low_memory=False)
+        # Use chunksize=10 AND explicitly set compression='gzip'
+        reader = pd.read_csv(DATA_PATH, chunksize=10, low_memory=False, compression='gzip')
         df_meta = next(reader)
     except Exception as e:
         print(f"Error reading initial chunk for metadata: {e}", file=sys.stderr, flush=True)
-        # Return empty lists on failure so the app still loads
+        # Return empty lists on failure so the app still loads the layout
         return {
             "boroughs": [], "years": [], "vehicle_types": [],
             "factors": [], "injuries": []
@@ -139,7 +139,7 @@ meta = load_metadata()
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.SLATE]) 
 server = app.server
 
-# Custom index string for dropdown visibility fix (using the previous full template)
+# Custom index string for dropdown visibility fix 
 app.index_string = '''
 <!DOCTYPE html>
 <html>
@@ -339,8 +339,7 @@ def filter_data_and_autofilter(n_generate, boroughs, years, vehicles, factors, i
 
 
     try:
-        # CRUCIAL FIX: Load the full 1GB data ONLY here, inside the callback
-        # This will trigger the slow 1GB download only when the user demands it.
+        # Load the full 1GB data ONLY here
         df = load_full_data()
         
         filtered = apply_filters(df, final_boroughs, final_years, vehicles, factors, final_injuries)
@@ -420,7 +419,7 @@ def update_graphs(json_data):
 
     # HEATMAP: Hour vs Day
     if "CRASH TIME" in df and "CRASH DATE" in df:
-        df["CRASH TIME"] = pd.to_datetime(df["CRASH TIME"], errors="coerce").dt.time.astype(str) # Convert time to string to avoid datetime issues
+        df["CRASH TIME"] = pd.to_datetime(df["CRASH TIME"], errors="coerce").dt.time.astype(str)
         df["HOUR"] = pd.to_datetime(df["CRASH TIME"], format='%H:%M:%S', errors="coerce").dt.hour
         df["DAY"] = pd.to_datetime(df["CRASH DATE"], errors="coerce").dt.day_name()
         pivot = df.pivot_table(index="HOUR", columns="DAY", values="COLLISION_ID", aggfunc="count").fillna(0)
