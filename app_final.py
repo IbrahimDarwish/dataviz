@@ -40,15 +40,14 @@ def load_full_data():
 def load_metadata():
     """Loads a tiny portion of data to extract metadata for dropdowns."""
     
-    # Define columns strictly needed for the dropdowns
+    # Define columns strictly needed for the dropdowns (CRASH DATE and CRASH TIME must have spaces)
     metadata_cols = [
-        "BOROUGH", "CRASH_DATE", "VEHICLE TYPE CODE 1", 
-        "CONTRIBUTING FACTOR VEHICLE 1", "PERSON_INJURY"
+        "BOROUGH", "CRASH DATE", "VEHICLE TYPE CODE 1", 
+        "CONTRIBUTING FACTOR VEHICLE 1", "PERSON_INJURY", "CRASH TIME"
     ]
     
     try:
         # FIX: Read ONLY the required columns (efficient), and then use .head(10) (valid)
-        # This solves the 'nrows' error and keeps startup memory minimal.
         df = pd.read_parquet(DATA_PATH, columns=metadata_cols)
         df_meta = df.head(1000) # Use 1000 rows to ensure full range of metadata is captured
     except Exception as e:
@@ -62,7 +61,10 @@ def load_metadata():
 
     # Use the small sample (df_meta) to populate all dropdowns
     boroughs = sorted(df_meta["BOROUGH"].dropna().unique().tolist()) if "BOROUGH" in df_meta else []
-    years = sorted(pd.to_datetime(df_meta["CRASH_DATE"], errors="coerce").dt.year.dropna().astype(int).unique().tolist()) if "CRASH_DATE" in df_meta else []
+    
+    # FIX: Use "CRASH DATE" with space
+    years = sorted(pd.to_datetime(df_meta["CRASH DATE"], errors="coerce").dt.year.dropna().astype(int).unique().tolist()) if "CRASH DATE" in df_meta else []
+    
     vehicle = sorted(df_meta["VEHICLE TYPE CODE 1"].dropna().unique().tolist()) if "VEHICLE TYPE CODE 1" in df_meta else []
     factors = sorted(df_meta["CONTRIBUTING FACTOR VEHICLE 1"].dropna().unique().tolist()) if "CONTRIBUTING FACTOR VEHICLE 1" in df_meta else []
     injuries = sorted(df_meta["PERSON_INJURY"].dropna().unique().tolist()) if "PERSON_INJURY" in df_meta else []
@@ -119,9 +121,12 @@ def apply_filters(df, boroughs, years, vehicles, factors, injuries):
 
     if boroughs and "BOROUGH" in out:
         out = out[out["BOROUGH"].isin(boroughs)]
-    if years and "CRASH_DATE" in out:
-        out["CRASH_DATE"] = pd.to_datetime(out["CRASH_DATE"], errors="coerce")
-        out = out[out["CRASH_DATE"].dt.year.isin(years)]
+    
+    # FIX: Use "CRASH DATE" with space
+    if years and "CRASH DATE" in out:
+        out["CRASH DATE"] = pd.to_datetime(out["CRASH DATE"], errors="coerce")
+        out = out[out["CRASH DATE"].dt.year.isin(years)]
+        
     if vehicles and "VEHICLE TYPE CODE 1" in out:
         out = out[out["VEHICLE TYPE CODE 1"].isin(vehicles)]
     if factors and "CONTRIBUTING FACTOR VEHICLE 1" in out:
@@ -418,16 +423,18 @@ def update_graphs(json_data):
         pie = create_fig(px.scatter(), "Person Injury Types (Data Missing)")
 
     # LINE: Crashes Over Time
-    if "CRASH_DATE" in df:
-        df["CRASH_DATE"] = pd.to_datetime(df["CRASH_DATE"], errors="coerce")
-        df_ts = df.dropna(subset=["CRASH_DATE"])
-        ts = df_ts.set_index("CRASH_DATE").resample("ME").size()
+    # FIX: Use "CRASH DATE" with space
+    if "CRASH DATE" in df:
+        df["CRASH DATE"] = pd.to_datetime(df["CRASH DATE"], errors="coerce")
+        df_ts = df.dropna(subset=["CRASH DATE"])
+        ts = df_ts.set_index("CRASH DATE").resample("ME").size()
         line = px.line(ts)
         line = create_fig(line, "Crashes Over Time")
     else:
         line = create_fig(px.scatter(), "Crashes Over Time (Data Missing)")
 
     # HEATMAP: Hour vs Day
+    # FIX: Use "CRASH TIME" and "CRASH DATE" with spaces
     if "CRASH TIME" in df and "CRASH DATE" in df:
         df["CRASH TIME"] = pd.to_datetime(df["CRASH TIME"], errors="coerce").dt.time.astype(str)
         df["HOUR"] = pd.to_datetime(df["CRASH TIME"], format='%H:%M:%S', errors="coerce").dt.hour
