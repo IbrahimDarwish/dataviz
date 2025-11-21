@@ -16,14 +16,15 @@ import sys # Added for visible error logging
 # ============================================================
 
 # NOTE: UPDATE THIS PATH with the direct download URL of your 'df_optimized.parquet' file
-DATA_PATH = "https://www.dropbox.com/scl/fi/7xr2u9y57jdlk6jbu63m4/df_optimized_final.parquet?rlkey=eqcg33vabg722383b7p306xtn&st=xm4ljcjo&dl=1"
+# This URL should point to the file created after local optimization.
+DATA_PATH = "YOUR_PARQUET_FILE_DIRECT_DOWNLOAD_URL_HERE"
 
 # --- 1. FULL DATA LOADER (Called ONLY on "Generate Report" click) ---
 @lru_cache(maxsize=1)
 def load_full_data():
     """Loads the entire optimized Parquet file into memory."""
     try:
-        # FIX: Use pd.read_parquet()
+        # Use pd.read_parquet()
         df = pd.read_parquet(DATA_PATH) 
         print("Full data loaded successfully from remote URL.", file=sys.stderr, flush=True)
         return df
@@ -38,20 +39,28 @@ def load_full_data():
 @lru_cache(maxsize=1)
 def load_metadata():
     """Loads a tiny portion of data to extract metadata for dropdowns."""
+    
+    # Define columns strictly needed for the dropdowns
+    metadata_cols = [
+        "BOROUGH", "CRASH_DATE", "VEHICLE TYPE CODE 1", 
+        "CONTRIBUTING FACTOR VEHICLE 1", "PERSON_INJURY"
+    ]
+    
     try:
-        # FIX: Use pd.read_parquet() with nrows=10 for minimal startup load
-        # nrows is the memory-safe way to get the first rows of a Parquet file.
-        df_meta = pd.read_parquet(DATA_PATH, nrows=10) 
+        # FIX: Read ONLY the required columns (efficient), and then use .head(10) (valid)
+        # This solves the 'nrows' error and keeps startup memory minimal.
+        df = pd.read_parquet(DATA_PATH, columns=metadata_cols)
+        df_meta = df.head(1000) # Use 1000 rows to ensure full range of metadata is captured
     except Exception as e:
         # If this fails, it means the app can't access the Parquet file
-        print(f"Error reading initial metadata chunk (Parquet): {e}", file=sys.stderr, flush=True)
+        print(f"Error reading initial metadata (Parquet): {e}", file=sys.stderr, flush=True)
         # Return empty lists on failure so the app still loads the layout
         return {
             "boroughs": [], "years": [], "vehicle_types": [],
             "factors": [], "injuries": []
         }
 
-    # Use the small chunk (df_meta) to populate all dropdowns
+    # Use the small sample (df_meta) to populate all dropdowns
     boroughs = sorted(df_meta["BOROUGH"].dropna().unique().tolist()) if "BOROUGH" in df_meta else []
     years = sorted(pd.to_datetime(df_meta["CRASH_DATE"], errors="coerce").dt.year.dropna().astype(int).unique().tolist()) if "CRASH_DATE" in df_meta else []
     vehicle = sorted(df_meta["VEHICLE TYPE CODE 1"].dropna().unique().tolist()) if "VEHICLE TYPE CODE 1" in df_meta else []
