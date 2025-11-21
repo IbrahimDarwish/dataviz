@@ -1,4 +1,3 @@
-
 import dash
 from dash import html, dcc
 import dash_bootstrap_components as dbc
@@ -10,36 +9,42 @@ import os
 import json
 from io import StringIO
 import time
-import sys
+import sys # Added for visible error logging
 
-DATA_PATH = "https://www.dropbox.com/scl/fi/7waxvqzhzlizujd5j5mbg/df_joined.csv?rlkey=y9hnjj2twmm5yjsivj2j3x5aa&st=uw56be8b&dl=1"
+# ============================================================
+#               UTILITIES & DATA LOADING (FIXED for Render)
+# ============================================================
 
-# This is slow (450s timeout needed) and memory-intensive (1GB RAM needed).
+# Replace with your confirmed, direct Google Drive/Dropbox download link.
+DATA_PATH = "https://www.dropbox.com/scl/fi/7waxvqzhzlizujd5j5mbg/df_joined.csv?rlkey=y9hnjj2twmm5yjsivj2j3x5aa&st=uw56be8b&dl=1" 
+# --- 1. FULL DATA LOADER (Called ONLY on "Generate Report" click) ---
 @lru_cache(maxsize=1)
 def load_full_data():
+    """Loads the entire 1GB CSV file into memory (This is the slow part)."""
     try:
         # pd.read_csv handles loading from the web URL
         df = pd.read_csv(DATA_PATH, low_memory=False)
-        # Log success (optional, but useful)
-        print("Data loaded successfully from remote URL.", file=sys.stderr, flush=True)
+        print("Full data loaded successfully from remote URL.", file=sys.stderr, flush=True)
         return df
     except Exception as e:
-        # Log the failure clearly to the Render console
+        # This error is critical and usually indicates a bad URL or network issue.
         print(f"--- FULL DATA LOAD FAILED ---", file=sys.stderr, flush=True)
         print(f"Error loading full data: {e}", file=sys.stderr, flush=True)
         print(f"--------------------------", file=sys.stderr, flush=True)
         raise FileNotFoundError("Could not load full data from remote URL.")
 
-# --- 2. METADATA LOADER (Called on startup for dropdowns - uses chunking to save RAM) ---
+# --- 2. METADATA LOADER (Called on startup for dropdowns - OOM FIX) ---
 @lru_cache(maxsize=1)
 def load_metadata():
+    """Loads a tiny chunk of data to extract metadata for dropdowns, avoiding OOM crash."""
     try:
-        # Read only the first 1000 rows (or whatever is needed) to get column values.
-        # This prevents the 1GB file from being loaded into memory on startup (OOM fix).
-        reader = pd.read_csv(DATA_PATH, chunksize=1000, low_memory=False)
+        # Use a tiny chunksize (e.g., 10 rows) to get column values 
+        # without loading the 1GB file into RAM during startup.
+        reader = pd.read_csv(DATA_PATH, chunksize=10, low_memory=False)
         df_meta = next(reader)
     except Exception as e:
         print(f"Error reading initial chunk for metadata: {e}", file=sys.stderr, flush=True)
+        # Return empty lists on failure so the app still loads
         return {
             "boroughs": [], "years": [], "vehicle_types": [],
             "factors": [], "injuries": []
@@ -47,11 +52,7 @@ def load_metadata():
 
     # Use the small chunk (df_meta) to populate all dropdowns
     boroughs = sorted(df_meta["BOROUGH"].dropna().unique().tolist()) if "BOROUGH" in df_meta else []
-    
-    # CRASH_DATE requires full range, but we approximate with the available data from the chunk
-    # (If the chunk is too small, you might miss a year, but it fixes OOM)
     years = sorted(pd.to_datetime(df_meta["CRASH_DATE"], errors="coerce").dt.year.dropna().astype(int).unique().tolist()) if "CRASH_DATE" in df_meta else []
-    
     vehicle = sorted(df_meta["VEHICLE TYPE CODE 1"].dropna().unique().tolist()) if "VEHICLE TYPE CODE 1" in df_meta else []
     factors = sorted(df_meta["CONTRIBUTING FACTOR VEHICLE 1"].dropna().unique().tolist()) if "CONTRIBUTING FACTOR VEHICLE 1" in df_meta else []
     injuries = sorted(df_meta["PERSON_INJURY"].dropna().unique().tolist()) if "PERSON_INJURY" in df_meta else []
@@ -138,7 +139,7 @@ meta = load_metadata()
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.SLATE]) 
 server = app.server
 
-# Custom index string for dropdown visibility fix
+# Custom index string for dropdown visibility fix (using the previous full template)
 app.index_string = '''
 <!DOCTYPE html>
 <html>
@@ -339,6 +340,7 @@ def filter_data_and_autofilter(n_generate, boroughs, years, vehicles, factors, i
 
     try:
         # CRUCIAL FIX: Load the full 1GB data ONLY here, inside the callback
+        # This will trigger the slow 1GB download only when the user demands it.
         df = load_full_data()
         
         filtered = apply_filters(df, final_boroughs, final_years, vehicles, factors, final_injuries)
@@ -418,7 +420,8 @@ def update_graphs(json_data):
 
     # HEATMAP: Hour vs Day
     if "CRASH TIME" in df and "CRASH DATE" in df:
-        df["HOUR"] = pd.to_datetime(df["CRASH TIME"], errors="coerce").dt.hour
+        df["CRASH TIME"] = pd.to_datetime(df["CRASH TIME"], errors="coerce").dt.time.astype(str) # Convert time to string to avoid datetime issues
+        df["HOUR"] = pd.to_datetime(df["CRASH TIME"], format='%H:%M:%S', errors="coerce").dt.hour
         df["DAY"] = pd.to_datetime(df["CRASH DATE"], errors="coerce").dt.day_name()
         pivot = df.pivot_table(index="HOUR", columns="DAY", values="COLLISION_ID", aggfunc="count").fillna(0)
         heat = px.imshow(pivot)
