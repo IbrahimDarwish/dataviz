@@ -16,7 +16,7 @@ import sys # Added for visible error logging
 # ============================================================
 
 # NOTE: This link must be a direct download link for the compressed file
-DATA_PATH = "https://www.dropbox.com/scl/fi/3fi7m2lvixz3lqr895plh/df_joined_optimized.csv.gz?rlkey=lra2omrwxgxsuvorsftm53b55&st=y8jwgoed&dl=1"
+DATA_PATH = "https://www.dropbox.com/scl/fi/7waxvqzhzlizujd5j5mbg/df_joined.csv?rlkey=y9hnjj2twmm5yjsivj2j3x5aa&st=3x9blpkt&dl=1"
 
 # --- 1. FULL DATA LOADER (Called ONLY on "Generate Report" click) ---
 @lru_cache(maxsize=1)
