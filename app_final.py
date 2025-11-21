@@ -12,19 +12,20 @@ import time
 import sys # Added for visible error logging
 
 # ============================================================
-#               UTILITIES & DATA LOADING (FIXED for GZIP)
+#               UTILITIES & DATA LOADING (FIXED for CSV)
 # ============================================================
 
-# NOTE: This link must be a direct download link for the compressed file
+# NOTE: This link must be a direct download link for the UNCOMPRESSED CSV file
+# The URL must be updated to point to the non-compressed CSV file.
 DATA_PATH = "https://www.dropbox.com/scl/fi/7waxvqzhzlizujd5j5mbg/df_joined.csv?rlkey=y9hnjj2twmm5yjsivj2j3x5aa&st=3x9blpkt&dl=1"
 
 # --- 1. FULL DATA LOADER (Called ONLY on "Generate Report" click) ---
 @lru_cache(maxsize=1)
 def load_full_data():
-    """Loads the entire optimized file into memory."""
+    """Loads the entire uncompressed file into memory."""
     try:
-        # FIX: Explicitly set compression to 'gzip'
-        df = pd.read_csv(DATA_PATH, low_memory=False, compression='gzip')
+        # FIX: Removed compression='gzip'
+        df = pd.read_csv(DATA_PATH, low_memory=False) 
         print("Full data loaded successfully from remote URL.", file=sys.stderr, flush=True)
         return df
     except Exception as e:
@@ -39,8 +40,9 @@ def load_full_data():
 def load_metadata():
     """Loads a tiny chunk of data to extract metadata for dropdowns."""
     try:
-        # FIX: Use chunksize=10 AND explicitly set compression='gzip'
-        reader = pd.read_csv(DATA_PATH, chunksize=10, low_memory=False, compression='gzip')
+        # FIX: Removed compression='gzip'
+        # Chunking is still used for memory safety during startup
+        reader = pd.read_csv(DATA_PATH, chunksize=10, low_memory=False) 
         df_meta = next(reader)
     except Exception as e:
         # If this fails, it's likely a network or URL error
@@ -340,7 +342,7 @@ def filter_data_and_autofilter(n_generate, boroughs, years, vehicles, factors, i
 
 
     try:
-        # Load the full 1GB data ONLY here
+        # Load the full data ONLY here
         df = load_full_data()
         
         filtered = apply_filters(df, final_boroughs, final_years, vehicles, factors, final_injuries)
