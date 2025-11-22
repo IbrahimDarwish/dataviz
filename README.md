@@ -45,7 +45,9 @@ This member handles the advanced website functionality, ensures all submission d
 * **Notebook Review:** Review the Jupyter/Colab notebook to ensure it meets all grading criteria, including clean code, descriptive Markdown cells, and comprehensive visualization validation of the cleaning steps.
 * **Code Review:** Review all code from both Notebook and website python file and make sure that all functions are working properly.
 * **Render Hosting:** Host the website on Render and make sure that it runs correctly.
- Member 1:
+* 
+
+**Member 1:
 Q1:
 Which NYC borough has the highest crash rate per capita, and how does
 this correlate with the number of fatalities and severe injuries?
