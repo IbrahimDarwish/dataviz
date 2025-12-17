@@ -9,13 +9,12 @@ import os
 import sys
 
 # ============================================================
-# 1. SETUP & DATA LOADING (MAXIMUM MEMORY OPTIMIZATION)
+# 1. SETUP & DATA LOADING (CLEAN VERSION)
 # ============================================================
 
 DATA_PATH = "https://www.dropbox.com/scl/fi/7xr2u9y57jdlk6jbu63m4/df_optimized_final.parquet?rlkey=eqcg33vabg722383b7p306xtn&st=xm4ljcjo&dl=1"
 
-# We only load strictly necessary columns to save RAM.
-# REMOVED: 'COLLISION_ID' (High memory usage, not needed for graphs)
+# We still only load the columns we actually use to save some RAM.
 REQUIRED_COLS = [
     "BOROUGH", "CRASH DATE", "CRASH TIME", 
     "LATITUDE", "LONGITUDE", "PERSON_INJURY", 
@@ -24,52 +23,36 @@ REQUIRED_COLS = [
 
 @lru_cache(maxsize=1)
 def load_data_safe():
-    """
-    Aggressive memory optimization loader.
-    Prioritizes keeping the app alive over loading 100% of history.
-    """
     try:
         print("Attempting to load Parquet...", file=sys.stderr)
         
-        # 1. Load specific columns only
+        # 1. Load data normally
         df = pd.read_parquet(DATA_PATH, columns=REQUIRED_COLS)
 
-        # 2. SAFETY CAP (CRITICAL FOR RENDER FREE TIER)
-        # 2.5 Million rows will crash 512MB RAM. 
-        # We slice the top 300k rows (usually the most recent data).
-        if len(df) > 300000:
-            print(f"Dataset too large ({len(df)} rows). Trimming to 300k for stability...", file=sys.stderr)
-            df = df.iloc[:300000].copy()
+        # 2. SAFETY CAP
+        # Since we removed the text optimizations, raw text takes up A LOT of memory.
+        # We must limit to 150k rows to stay under the 512MB Render limit.
+        if len(df) > 150000:
+            print(f"Dataset too large for raw text mode. Trimming to 150k rows...", file=sys.stderr)
+            df = df.iloc[:150000].copy()
 
-        # 3. OPTIMIZE TEXT (Object -> Category)
-        # This reduces memory usage for text columns by ~80-90%
-        cat_cols = ["BOROUGH", "PERSON_INJURY", "VEHICLE TYPE CODE 1", "CONTRIBUTING FACTOR VEHICLE 1"]
-        for col in cat_cols:
-            df[col] = df[col].astype("category")
-
-        # 4. OPTIMIZE NUMBERS (float64 -> float32)
-        # Halves memory for coordinates
+        # 3. Basic Float Optimization (Harmless, just saves space)
         df["LATITUDE"] = df["LATITUDE"].astype("float32")
         df["LONGITUDE"] = df["LONGITUDE"].astype("float32")
 
-        # 5. PRE-PROCESS TIME (Drop heavy strings)
-        # Extract the HOUR as a tiny integer (int8) and drop the huge string column
-        df["HOUR"] = pd.to_datetime(df["CRASH TIME"], format='%H:%M', errors='coerce').dt.hour.fillna(0).astype("int8")
-        df.drop(columns=["CRASH TIME"], inplace=True)
-
-        # 6. DATE CONVERSION
+        # 4. Standard Date Conversion
         df["CRASH DATE"] = pd.to_datetime(df["CRASH DATE"], errors="coerce")
         
-        print(f"Loaded {len(df)} rows successfully (Optimized Mode).", file=sys.stderr)
+        print(f"Loaded {len(df)} rows successfully.", file=sys.stderr)
         return df
         
     except Exception as e:
-        print(f"CRITICAL ERROR: Could not load data. {e}", file=sys.stderr)
-        # Fallback: Tiny dummy dataset to prevent app crash
+        print(f"CRITICAL ERROR: {e}", file=sys.stderr)
+        # Fallback dummy data
         return pd.DataFrame({
             "BOROUGH": ["MANHATTAN", "BROOKLYN", "QUEENS", "BRONX", "MANHATTAN"],
             "CRASH DATE": pd.to_datetime(["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04", "2023-01-05"]),
-            "HOUR": [12, 13, 14, 15, 16],
+            "CRASH TIME": ["12:00", "13:00", "14:00", "15:00", "16:00"],
             "LATITUDE": [40.7128, 40.6782, 40.7282, 40.8448, 40.7580],
             "LONGITUDE": [-74.0060, -73.9442, -73.7949, -73.8648, -73.9855],
             "PERSON_INJURY": ["Injured", "Killed", "Unspecified", "Injured", "Unspecified"],
@@ -89,7 +72,6 @@ def load_metadata():
     }
 
 def apply_filters(df, boroughs, years, vehicles, factors, injuries):
-    # Fast boolean indexing
     mask = pd.Series(True, index=df.index)
     if boroughs: mask &= df["BOROUGH"].isin(boroughs)
     if years:    mask &= df["CRASH DATE"].dt.year.isin(years)
@@ -194,15 +176,18 @@ def update_dashboard(n_clicks, boroughs, years, vehicles, injuries):
     ts = filtered.set_index("CRASH DATE").resample("ME").size()
     line = create_fig(px.line(ts), "Trend Over Time")
 
-    # 4. Heatmap (UPDATED FOR OPTIMIZED 'HOUR' COLUMN)
-    if "HOUR" in filtered:
-        heat_df = filtered[["HOUR", "CRASH DATE"]].copy()
+    # 4. Heatmap (ORIGINAL STRING PARSING RESTORED)
+    if "CRASH TIME" in filtered:
+        # Create a copy to handle date parsing without affecting main df
+        heat_df = filtered.copy()
+        
+        # Parse strings to hours on the fly
+        heat_df["HOUR"] = pd.to_datetime(heat_df["CRASH TIME"], format='%H:%M', errors="coerce").dt.hour
         heat_df["DAY"] = heat_df["CRASH DATE"].dt.day_name()
         
-        # Create pivot table
         pivot = heat_df.pivot_table(index="HOUR", columns="DAY", aggfunc="size", fill_value=0)
         
-        # Reindex to ensure all 24 hours show up even if data is missing
+        # Ensure all hours 0-23 exist for a clean graph
         pivot = pivot.reindex(index=range(24), fill_value=0)
         
         heat = create_fig(px.imshow(pivot), "Time Heatmap")
