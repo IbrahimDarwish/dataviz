@@ -6,15 +6,18 @@ import pandas as pd
 import plotly.express as px
 from functools import lru_cache
 import os
+import json
+from io import StringIO
 import sys
 
 # ============================================================
-# 1. SETUP & DATA LOADING (CLEAN VERSION)
+# 1. OPTIMIZED DATA LOADING (The "Safety" Logic)
 # ============================================================
 
 DATA_PATH = "https://www.dropbox.com/scl/fi/7xr2u9y57jdlk6jbu63m4/df_optimized_final.parquet?rlkey=eqcg33vabg722383b7p306xtn&st=xm4ljcjo&dl=1"
 
-# We still only load the columns we actually use to save some RAM.
+# We strictly limit columns to save RAM. 
+# NOTE: Removed 'COLLISION_ID' to save memory.
 REQUIRED_COLS = [
     "BOROUGH", "CRASH DATE", "CRASH TIME", 
     "LATITUDE", "LONGITUDE", "PERSON_INJURY", 
@@ -23,20 +26,22 @@ REQUIRED_COLS = [
 
 @lru_cache(maxsize=1)
 def load_data_safe():
+    """
+    Loads data with strict memory limits for Render Free Tier.
+    """
     try:
         print("Attempting to load Parquet...", file=sys.stderr)
         
-        # 1. Load data normally
+        # 1. Load specific columns only
         df = pd.read_parquet(DATA_PATH, columns=REQUIRED_COLS)
 
-        # 2. SAFETY CAP
-        # Since we removed the text optimizations, raw text takes up A LOT of memory.
-        # We must limit to 150k rows to stay under the 512MB Render limit.
+        # 2. SAFETY CAP (Critical for Render)
+        # We limit to 150k rows. Loading 2.5M rows into dcc.Store will crash the user's browser.
         if len(df) > 150000:
-            print(f"Dataset too large for raw text mode. Trimming to 150k rows...", file=sys.stderr)
+            print(f"Dataset too large. Trimming to 150k rows for stability...", file=sys.stderr)
             df = df.iloc[:150000].copy()
 
-        # 3. Basic Float Optimization (Harmless, just saves space)
+        # 3. Optimize Numbers
         df["LATITUDE"] = df["LATITUDE"].astype("float32")
         df["LONGITUDE"] = df["LONGITUDE"].astype("float32")
 
@@ -50,18 +55,19 @@ def load_data_safe():
         print(f"CRITICAL ERROR: {e}", file=sys.stderr)
         # Fallback dummy data
         return pd.DataFrame({
-            "BOROUGH": ["MANHATTAN", "BROOKLYN", "QUEENS", "BRONX", "MANHATTAN"],
-            "CRASH DATE": pd.to_datetime(["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04", "2023-01-05"]),
-            "CRASH TIME": ["12:00", "13:00", "14:00", "15:00", "16:00"],
-            "LATITUDE": [40.7128, 40.6782, 40.7282, 40.8448, 40.7580],
-            "LONGITUDE": [-74.0060, -73.9442, -73.7949, -73.8648, -73.9855],
-            "PERSON_INJURY": ["Injured", "Killed", "Unspecified", "Injured", "Unspecified"],
-            "VEHICLE TYPE CODE 1": ["Sedan", "SUV", "Bus", "Sedan", "Taxi"],
-            "CONTRIBUTING FACTOR VEHICLE 1": ["Unspecified", "Driver Inattention", "Failure to Yield", "Unspecified", "Other"]
+            "BOROUGH": ["MANHATTAN", "BROOKLYN"],
+            "CRASH DATE": pd.to_datetime(["2023-01-01", "2023-01-02"]),
+            "CRASH TIME": ["12:00", "13:00"],
+            "LATITUDE": [40.7128, 40.6782],
+            "LONGITUDE": [-74.0060, -73.9442],
+            "PERSON_INJURY": ["Injured", "Killed"],
+            "VEHICLE TYPE CODE 1": ["Sedan", "SUV"],
+            "CONTRIBUTING FACTOR VEHICLE 1": ["Unspecified", "Driver Inattention"]
         })
 
 @lru_cache(maxsize=1)
 def load_metadata():
+    # Load the safe dataframe to extract dropdown options
     df = load_data_safe()
     return {
         "boroughs": sorted(df["BOROUGH"].dropna().unique().tolist()) if "BOROUGH" in df else [],
@@ -70,6 +76,35 @@ def load_metadata():
         "factors": sorted(df["CONTRIBUTING FACTOR VEHICLE 1"].dropna().unique().tolist()) if "CONTRIBUTING FACTOR VEHICLE 1" in df else [],
         "injuries": sorted(df["PERSON_INJURY"].dropna().unique().tolist()) if "PERSON_INJURY" in df else []
     }
+
+def parse_search_query(search_query, metadata):
+    """Restored Feature: Search Bar Logic"""
+    if not search_query or not search_query.strip():
+        return None 
+
+    s = search_query.lower()
+    parsed_filters = {"boroughs": [], "years": [], "injuries": []}
+    
+    # Check Boroughs
+    for b in metadata["boroughs"]:
+        if b.lower() in s: parsed_filters["boroughs"].append(b)
+            
+    # Check Years
+    for year in metadata["years"]:
+        if str(year) in s: parsed_filters["years"].append(year)
+            
+    # Check Injuries
+    injury_keywords = {
+        "pedestrian": ["PEDESTRIAN"], "cyclist": ["BICYCLIST"],
+        "motorist": ["PASSENGER", "DRIVER"], "killed": ["KILLED"], "injured": ["INJURED"]
+    }
+    for keyword, values in injury_keywords.items():
+        if keyword in s:
+            for val in values:
+                if val in metadata["injuries"]: parsed_filters["injuries"].append(val)
+    
+    if any(parsed_filters.values()): return parsed_filters
+    return None
 
 def apply_filters(df, boroughs, years, vehicles, factors, injuries):
     mask = pd.Series(True, index=df.index)
@@ -80,8 +115,12 @@ def apply_filters(df, boroughs, years, vehicles, factors, injuries):
     if injuries: mask &= df["PERSON_INJURY"].isin(injuries)
     return df[mask]
 
+# Helpers for dcc.Store
+def df_to_json(df): return df.to_json(date_format="iso", orient="split")
+def json_to_df(js): return pd.read_json(StringIO(js), orient="split")
+
 # ============================================================
-# 2. APP LAYOUT
+# 2. APP LAYOUT (Restored your Rich Layout)
 # ============================================================
 
 meta = load_metadata()
@@ -89,6 +128,7 @@ app = dash.Dash(__name__, external_stylesheets=[dbc.themes.SLATE])
 server = app.server
 
 app.layout = dbc.Container([
+    # --- HEADER ---
     dbc.Row(className="mb-4 pt-4", style={'border-bottom': '1px solid #444'}, children=[
         dbc.Col(html.H1([html.I(className="bi bi-car-front-fill me-3"), "NYC Collision Report"], className="text-info display-4"), width=9),
     ]),
@@ -96,113 +136,180 @@ app.layout = dbc.Container([
     dbc.Row([
         # --- SIDEBAR ---
         dbc.Col(dbc.Card(dbc.CardBody([
-            html.H4("Filters", className="card-title text-warning mb-4"),
-            dbc.Label("Borough"),
-            dcc.Dropdown(id="borough", options=[{"label": b, "value": b} for b in meta["boroughs"]], multi=True, className="mb-2"),
-            dbc.Label("Year"),
-            dcc.Dropdown(id="year", options=[{"label": y, "value": y} for y in meta["years"]], multi=True, className="mb-2"),
-            dbc.Label("Vehicle"),
-            dcc.Dropdown(id="vehicle", options=[{"label": v, "value": v} for v in meta["vehicle_types"]], multi=True, className="mb-2"),
-            dbc.Label("Injury Type"),
-            dcc.Dropdown(id="injury", options=[{"label": i, "value": i} for i in meta["injuries"]], multi=True, className="mb-4"),
+            html.H4("Filter Controls", className="card-title text-warning mb-4"),
             
-            dbc.Button("Generate Report", id="generate", color="success", className="w-100 mb-2"),
-            dbc.Button("Reset", id="reset", color="danger", className="w-100"),
-            dbc.Alert(id="alert", is_open=False, className="mt-3")
-        ]), className="h-100 bg-dark"), width=3),
+            dbc.Label("Borough", className="mt-2"),
+            dcc.Dropdown(id="borough", options=[{"label": b, "value": b} for b in meta["boroughs"]], multi=True, value=[], className="mb-3"),
 
-        # --- GRAPHS ---
+            dbc.Label("Year"),
+            dcc.Dropdown(id="year", options=[{"label": y, "value": y} for y in meta["years"]], multi=True, value=[], className="mb-3"),
+
+            dbc.Label("Vehicle Type"),
+            dcc.Dropdown(id="vehicle", options=[{"label": v, "value": v} for v in meta["vehicle_types"]], multi=True, value=[], className="mb-3"),
+
+            dbc.Label("Contributing Factor"),
+            dcc.Dropdown(id="factor", options=[{"label": f, "value": f} for f in meta["factors"]], multi=True, value=[], className="mb-3"),
+
+            dbc.Label("Person Injury Type"), 
+            dcc.Dropdown(id="injury", options=[{"label": i, "value": i} for i in meta["injuries"]], multi=True, value=[], className="mb-4"),
+
+            html.H5("Search & Actions", className="text-info mb-3"),
+            dbc.Label("Search Keywords"), 
+            dcc.Input(id="search", type="text", style={"width": "100%"}, placeholder="e.g., Manhattan 2023 cyclist...", className="mb-4"),
+
+            dbc.Row([
+                dbc.Col(dbc.Button("Generate Report", id="generate", color="success", className="w-100"), width=8),
+                dbc.Col(dbc.Button("Reset", id="reset", color="danger", className="w-100"), width=4)
+            ], className="mb-4"),
+            
+            dbc.Alert(id="alert", is_open=False, className="mt-3")
+        ]), className="h-100 shadow-lg bg-dark", style={"min-height": "100vh"}), width=3, className="p-0"),
+
+        # --- VISUALIZATIONS ---
         dbc.Col(html.Div([
             dbc.Row([
-                dbc.Col(dbc.Card(dcc.Graph(id="bar"), className="shadow-sm"), width=6, className="mb-4"),
-                dbc.Col(dbc.Card(dcc.Graph(id="pie"), className="shadow-sm"), width=6, className="mb-4"),
+                dbc.Col(dbc.Card(dcc.Graph(id="bar"), className="shadow-sm h-100"), width=6, className="mb-4"),
+                dbc.Col(dbc.Card(dcc.Graph(id="pie"), className="shadow-sm h-100"), width=6, className="mb-4"),
             ]),
             dbc.Row([
-                dbc.Col(dbc.Card(dcc.Graph(id="line"), className="shadow-sm"), width=6, className="mb-4"),
-                dbc.Col(dbc.Card(dcc.Graph(id="heat"), className="shadow-sm"), width=6, className="mb-4"),
+                dbc.Col(dbc.Card(dcc.Graph(id="line"), className="shadow-sm h-100"), width=6, className="mb-4"),
+                dbc.Col(dbc.Card(dcc.Graph(id="heat"), className="shadow-sm h-100"), width=6, className="mb-4"),
             ]),
             dbc.Row([
-                dbc.Col(dbc.Card(dcc.Graph(id="map", style={'height': '50vh'}), className="shadow-lg"), width=12),
+                dbc.Col(dbc.Card(dcc.Graph(id="map", style={'height': '60vh'}), className="shadow-lg"), width=12),
             ])
-        ], className="p-4 bg-secondary"), width=9)
-    ])
+        ], className="p-4 bg-secondary"), width=9, className="p-4")
+    ], className="g-0"),
+
+    dcc.Store(id="store")
 ], fluid=True)
 
 # ============================================================
-# 3. COMBINED CALLBACK
+# 3. CALLBACKS (Restored Logic + Fixed Heatmap)
 # ============================================================
 
+# 1. Reset Button
 @app.callback(
-    Output("borough", "value"), Output("year", "value"), Output("vehicle", "value"), Output("injury", "value"),
-    Input("reset", "n_clicks"), prevent_initial_call=True
-)
-def reset(n): return [], [], [], []
-
-@app.callback(
-    Output("bar", "figure"), Output("pie", "figure"), Output("line", "figure"),
-    Output("heat", "figure"), Output("map", "figure"), Output("alert", "children"), Output("alert", "is_open"),
-    
-    Input("generate", "n_clicks"),
-    State("borough", "value"), State("year", "value"), 
-    State("vehicle", "value"), State("injury", "value"),
+    Output("borough", "value", allow_duplicate=True),
+    Output("year", "value", allow_duplicate=True),
+    Output("vehicle", "value", allow_duplicate=True),
+    Output("factor", "value", allow_duplicate=True),
+    Output("injury", "value", allow_duplicate=True),
+    Output("search", "value", allow_duplicate=True),
+    Output("store", "data", allow_duplicate=True),
+    Output("alert", "is_open", allow_duplicate=True),
+    Input("reset", "n_clicks"),
     prevent_initial_call=True
 )
-def update_dashboard(n_clicks, boroughs, years, vehicles, injuries):
-    # Setup styles
+def reset_all(n_clicks):
+    if n_clicks: return [], [], [], [], [], "", None, False
+    raise dash.exceptions.PreventUpdate
+
+# 2. Data Filtering (Restored Search Logic)
+@app.callback(
+    Output("store", "data"),
+    Output("alert", "children"),
+    Output("alert", "is_open"),
+    Output("borough", "value"),
+    Output("year", "value"),
+    Output("injury", "value"),
+    
+    Input("generate", "n_clicks"),
+    State("borough", "value"), State("year", "value"),
+    State("vehicle", "value"), State("factor", "value"),
+    State("injury", "value"), State("search", "value"),
+    prevent_initial_call=True
+)
+def filter_data_and_autofilter(n_generate, boroughs, years, vehicles, factors, injuries, search):
+    if not n_generate: raise dash.exceptions.PreventUpdate
+
+    metadata = load_metadata()
+    parsed_search_filters = parse_search_query(search, metadata)
+
+    final_boroughs = boroughs
+    final_years = years
+    final_injuries = injuries
+
+    # Override dropdowns if search query finds specific filters
+    if parsed_search_filters:
+        final_boroughs = parsed_search_filters.get("boroughs", final_boroughs)
+        final_years = parsed_search_filters.get("years", final_years)
+        final_injuries = parsed_search_filters.get("injuries", final_injuries)
+
+    try:
+        # Load Safe Data (Optimized)
+        df = load_data_safe()
+        filtered = apply_filters(df, final_boroughs, final_years, vehicles, factors, final_injuries)
+
+        msg = f"Report generated successfully: {len(filtered)} records found."
+        
+        # We pass the data to dcc.Store
+        # WARNING: If filtered data is > 20MB, this might lag, but 150k rows should be okay.
+        return (
+            df_to_json(filtered), 
+            msg, True,
+            final_boroughs, final_years, final_injuries
+        )
+    except Exception as e:
+        return None, str(e), True, final_boroughs, final_years, final_injuries
+
+# 3. Graph Update
+@app.callback(
+    Output("bar", "figure"), Output("pie", "figure"),
+    Output("line", "figure"), Output("heat", "figure"),
+    Output("map", "figure"),
+    Input("store", "data")
+)
+def update_graphs(json_data):
     layout_style = {'plot_bgcolor': 'rgba(0,0,0,0)', 'paper_bgcolor': 'rgba(0,0,0,0)', 'font': {'color': '#DDD'}}
     def create_fig(fig, title):
         fig.update_layout(title_text=title, **layout_style)
         return fig
-    empty = create_fig(px.scatter(), "No Data")
-
-    # Load & Filter
-    df = load_data_safe()
-    filtered = apply_filters(df, boroughs, years, vehicles, [], injuries)
     
-    if filtered.empty:
-        return empty, empty, empty, empty, empty, "No records found.", True
+    if not json_data:
+        empty = create_fig(px.scatter(), "No Data Loaded")
+        return empty, empty, empty, empty, empty
 
-    # 1. Bar Chart
-    if "BOROUGH" in filtered:
-        counts = filtered["BOROUGH"].value_counts().reset_index()
-        counts.columns = ["BOROUGH", "count"]
-        bar = create_fig(px.bar(counts, x="BOROUGH", y="count"), "Crashes by Borough")
-    else: bar = empty
+    df = json_to_df(json_data)
+    
+    # BAR
+    if "BOROUGH" in df:
+        bar = create_fig(px.bar(df["BOROUGH"].value_counts().reset_index(), x="BOROUGH", y="count"), "Crashes by Borough")
+    else: bar = create_fig(px.scatter(), "No Data")
 
-    # 2. Pie Chart
-    pie = create_fig(px.pie(filtered, names="PERSON_INJURY"), "Injuries") if "PERSON_INJURY" in filtered else empty
+    # PIE
+    if "PERSON_INJURY" in df:
+        pie = create_fig(px.pie(df, names="PERSON_INJURY"), "Person Injury Types")
+    else: pie = create_fig(px.scatter(), "No Data")
 
-    # 3. Line Chart
-    ts = filtered.set_index("CRASH DATE").resample("ME").size()
-    line = create_fig(px.line(ts), "Trend Over Time")
+    # LINE
+    if "CRASH DATE" in df:
+        df["CRASH DATE"] = pd.to_datetime(df["CRASH DATE"])
+        ts = df.set_index("CRASH DATE").resample("ME").size()
+        line = create_fig(px.line(ts), "Crashes Over Time")
+    else: line = create_fig(px.scatter(), "No Data")
 
-    # 4. Heatmap (ORIGINAL STRING PARSING RESTORED)
-    if "CRASH TIME" in filtered:
-        # Create a copy to handle date parsing without affecting main df
-        heat_df = filtered.copy()
+    # HEATMAP (FIXED: Removed COLLISION_ID dependency)
+    if "CRASH TIME" in df and "CRASH DATE" in df:
+        df["CRASH TIME"] = pd.to_datetime(df["CRASH TIME"], errors="coerce").dt.time.astype(str)
+        df["HOUR"] = pd.to_datetime(df["CRASH TIME"], format='%H:%M:%S', errors="coerce").dt.hour
+        df["DAY"] = pd.to_datetime(df["CRASH DATE"], errors="coerce").dt.day_name()
         
-        # Parse strings to hours on the fly
-        heat_df["HOUR"] = pd.to_datetime(heat_df["CRASH TIME"], format='%H:%M', errors="coerce").dt.hour
-        heat_df["DAY"] = heat_df["CRASH DATE"].dt.day_name()
-        
-        pivot = heat_df.pivot_table(index="HOUR", columns="DAY", aggfunc="size", fill_value=0)
-        
-        # Ensure all hours 0-23 exist for a clean graph
-        pivot = pivot.reindex(index=range(24), fill_value=0)
-        
-        heat = create_fig(px.imshow(pivot), "Time Heatmap")
-    else: heat = empty
+        # Use aggfunc='size' to count rows instead of counting 'COLLISION_ID'
+        pivot = df.pivot_table(index="HOUR", columns="DAY", aggfunc="size", fill_value=0)
+        heat = create_fig(px.imshow(pivot), "Heatmap: Hour vs Day")
+    else: heat = create_fig(px.scatter(), "No Data")
 
-    # 5. Map (Sampled)
-    if "LATITUDE" in filtered:
-        map_df = filtered.dropna(subset=["LATITUDE", "LONGITUDE"])
-        if len(map_df) > 1000: map_df = map_df.sample(1000) # Keep map fast
-        map_fig = px.scatter_mapbox(map_df, lat="LATITUDE", lon="LONGITUDE", zoom=10, mapbox_style="carto-darkmatter")
+    # MAP
+    if "LATITUDE" in df:
+        df2 = df.dropna(subset=["LATITUDE", "LONGITUDE"])
+        if len(df2) > 1000: df2 = df2.sample(1000) # Sample for map speed
+        map_fig = px.scatter_mapbox(df2, lat="LATITUDE", lon="LONGITUDE", zoom=10, mapbox_style="carto-darkmatter")
         map_fig = create_fig(map_fig, "Crash Locations")
         map_fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
-    else: map_fig = empty
+    else: map_fig = create_fig(px.scatter(), "No Data")
 
-    return bar, pie, line, heat, map_fig, f"Showing {len(filtered)} records.", True
+    return bar, pie, line, heat, map_fig
 
 if __name__ == '__main__':
     app.run_server(debug=False)
