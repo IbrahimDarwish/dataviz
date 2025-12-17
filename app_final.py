@@ -20,13 +20,15 @@ import sys # Added for visible error logging
 DATA_PATH = "https://www.dropbox.com/scl/fi/7xr2u9y57jdlk6jbu63m4/df_optimized_final.parquet?rlkey=eqcg33vabg722383b7p306xtn&st=xm4ljcjo&dl=1"
 
 # --- 1. FULL DATA LOADER (Called ONLY on "Generate Report" click) ---
+# --- 1. FULL DATA LOADER (Called ONLY on "Generate Report" click) ---
 @lru_cache(maxsize=1)
 def load_full_data():
     """Loads the entire optimized Parquet file into memory."""
     try:
-        # Use pd.read_parquet()
-        df = pd.read_parquet(DATA_PATH) 
-        print("Full data loaded successfully from remote URL.", file=sys.stderr, flush=True)
+        # CHANGE IS HERE: Added .head(10) to restrict to 10 rows
+        df = pd.read_parquet(DATA_PATH).head(10)
+        
+        print("Full data loaded successfully from remote URL (LIMITED TO 10 ROWS).", file=sys.stderr, flush=True)
         return df
     except Exception as e:
         # Log the critical failure clearly
@@ -34,7 +36,6 @@ def load_full_data():
         print(f"Error loading full data: {e}", file=sys.stderr, flush=True)
         print(f"--------------------------", file=sys.stderr, flush=True)
         raise FileNotFoundError("Could not load full data from remote URL.")
-
 # --- 2. METADATA LOADER (Called on startup for dropdowns - OOM FIX) ---
 @lru_cache(maxsize=1)
 def load_metadata():
