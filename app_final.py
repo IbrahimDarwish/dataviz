@@ -26,7 +26,7 @@ def load_full_data():
     """Loads the entire optimized Parquet file into memory."""
     try:
         # CHANGE IS HERE: Added .head(10) to restrict to 10 rows
-        df = pd.read_parquet(DATA_PATH).head(10)
+        df = pd.read_parquet(DATA_PATH).head(2)
         
         print("Full data loaded successfully from remote URL (LIMITED TO 10 ROWS).", file=sys.stderr, flush=True)
         return df
