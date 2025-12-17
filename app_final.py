@@ -11,13 +11,11 @@ from io import StringIO
 import sys
 
 # ============================================================
-# 1. OPTIMIZED DATA LOADING (The "Safety" Logic)
+# 1. OPTIMIZED DATA LOADING
 # ============================================================
 
 DATA_PATH = "https://www.dropbox.com/scl/fi/7xr2u9y57jdlk6jbu63m4/df_optimized_final.parquet?rlkey=eqcg33vabg722383b7p306xtn&st=xm4ljcjo&dl=1"
 
-# We strictly limit columns to save RAM. 
-# NOTE: Removed 'COLLISION_ID' to save memory.
 REQUIRED_COLS = [
     "BOROUGH", "CRASH DATE", "CRASH TIME", 
     "LATITUDE", "LONGITUDE", "PERSON_INJURY", 
@@ -36,7 +34,7 @@ def load_data_safe():
         df = pd.read_parquet(DATA_PATH, columns=REQUIRED_COLS)
 
         # 2. SAFETY CAP (Critical for Render)
-        # We limit to 150k rows. Loading 2.5M rows into dcc.Store will crash the user's browser.
+        # Limit to 150k rows to prevent memory crashes
         if len(df) > 150000:
             print(f"Dataset too large. Trimming to 150k rows for stability...", file=sys.stderr)
             df = df.iloc[:150000].copy()
@@ -67,18 +65,27 @@ def load_data_safe():
 
 @lru_cache(maxsize=1)
 def load_metadata():
-    # Load the safe dataframe to extract dropdown options
+    # Load the safe dataframe
     df = load_data_safe()
+    
+    # --- CLEANING STEP FOR VEHICLES ---
+    # Only take the Top 50 most common vehicles to hide typos/rare weird inputs
+    if "VEHICLE TYPE CODE 1" in df:
+        top_vehicles = df["VEHICLE TYPE CODE 1"].value_counts().head(50).index.tolist()
+        vehicle_list = sorted(top_vehicles)
+    else:
+        vehicle_list = []
+
     return {
         "boroughs": sorted(df["BOROUGH"].dropna().unique().tolist()) if "BOROUGH" in df else [],
         "years": sorted(df["CRASH DATE"].dt.year.dropna().unique().tolist()) if "CRASH DATE" in df else [],
-        "vehicle_types": sorted(df["VEHICLE TYPE CODE 1"].dropna().unique().tolist()) if "VEHICLE TYPE CODE 1" in df else [],
+        "vehicle_types": vehicle_list, # Cleaned list
         "factors": sorted(df["CONTRIBUTING FACTOR VEHICLE 1"].dropna().unique().tolist()) if "CONTRIBUTING FACTOR VEHICLE 1" in df else [],
         "injuries": sorted(df["PERSON_INJURY"].dropna().unique().tolist()) if "PERSON_INJURY" in df else []
     }
 
 def parse_search_query(search_query, metadata):
-    """Restored Feature: Search Bar Logic"""
+    """Parses natural language queries."""
     if not search_query or not search_query.strip():
         return None 
 
@@ -120,7 +127,7 @@ def df_to_json(df): return df.to_json(date_format="iso", orient="split")
 def json_to_df(js): return pd.read_json(StringIO(js), orient="split")
 
 # ============================================================
-# 2. APP LAYOUT (Restored your Rich Layout)
+# 2. APP LAYOUT
 # ============================================================
 
 meta = load_metadata()
@@ -185,7 +192,7 @@ app.layout = dbc.Container([
 ], fluid=True)
 
 # ============================================================
-# 3. CALLBACKS (Restored Logic + Fixed Heatmap)
+# 3. CALLBACKS
 # ============================================================
 
 # 1. Reset Button
@@ -205,7 +212,7 @@ def reset_all(n_clicks):
     if n_clicks: return [], [], [], [], [], "", None, False
     raise dash.exceptions.PreventUpdate
 
-# 2. Data Filtering (Restored Search Logic)
+# 2. Data Filtering
 @app.callback(
     Output("store", "data"),
     Output("alert", "children"),
@@ -237,14 +244,12 @@ def filter_data_and_autofilter(n_generate, boroughs, years, vehicles, factors, i
         final_injuries = parsed_search_filters.get("injuries", final_injuries)
 
     try:
-        # Load Safe Data (Optimized)
+        # Load Safe Data
         df = load_data_safe()
         filtered = apply_filters(df, final_boroughs, final_years, vehicles, factors, final_injuries)
 
         msg = f"Report generated successfully: {len(filtered)} records found."
         
-        # We pass the data to dcc.Store
-        # WARNING: If filtered data is > 20MB, this might lag, but 150k rows should be okay.
         return (
             df_to_json(filtered), 
             msg, True,
@@ -289,13 +294,12 @@ def update_graphs(json_data):
         line = create_fig(px.line(ts), "Crashes Over Time")
     else: line = create_fig(px.scatter(), "No Data")
 
-    # HEATMAP (FIXED: Removed COLLISION_ID dependency)
+    # HEATMAP
     if "CRASH TIME" in df and "CRASH DATE" in df:
         df["CRASH TIME"] = pd.to_datetime(df["CRASH TIME"], errors="coerce").dt.time.astype(str)
         df["HOUR"] = pd.to_datetime(df["CRASH TIME"], format='%H:%M:%S', errors="coerce").dt.hour
         df["DAY"] = pd.to_datetime(df["CRASH DATE"], errors="coerce").dt.day_name()
         
-        # Use aggfunc='size' to count rows instead of counting 'COLLISION_ID'
         pivot = df.pivot_table(index="HOUR", columns="DAY", aggfunc="size", fill_value=0)
         heat = create_fig(px.imshow(pivot), "Heatmap: Hour vs Day")
     else: heat = create_fig(px.scatter(), "No Data")
