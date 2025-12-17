@@ -9,62 +9,83 @@ import os
 import sys
 
 # ============================================================
-# 1. SETUP & DATA LOADING (MEMORY SAFE MODE)
+# 1. SETUP & DATA LOADING (MAXIMUM MEMORY OPTIMIZATION)
 # ============================================================
 
 DATA_PATH = "https://www.dropbox.com/scl/fi/7xr2u9y57jdlk6jbu63m4/df_optimized_final.parquet?rlkey=eqcg33vabg722383b7p306xtn&st=xm4ljcjo&dl=1"
 
-# We only strictly need these columns. Reading only these saves RAM.
+# We only load strictly necessary columns to save RAM.
+# REMOVED: 'COLLISION_ID' (High memory usage, not needed for graphs)
 REQUIRED_COLS = [
     "BOROUGH", "CRASH DATE", "CRASH TIME", 
     "LATITUDE", "LONGITUDE", "PERSON_INJURY", 
-    "VEHICLE TYPE CODE 1", "CONTRIBUTING FACTOR VEHICLE 1", "COLLISION_ID"
+    "VEHICLE TYPE CODE 1", "CONTRIBUTING FACTOR VEHICLE 1"
 ]
 
 @lru_cache(maxsize=1)
 def load_data_safe():
-    """Attempts to load remote data. If it fails/OOMs, returns dummy data."""
+    """
+    Aggressive memory optimization loader.
+    Prioritizes keeping the app alive over loading 100% of history.
+    """
     try:
-        # OPTIMIZATION: Read ONLY the columns we need.
-        # This prevents loading useless text columns that waste RAM.
         print("Attempting to load Parquet...", file=sys.stderr)
         
-        # NOTE: If this still crashes, the file is simply too big for the free tier.
+        # 1. Load specific columns only
         df = pd.read_parquet(DATA_PATH, columns=REQUIRED_COLS)
-        
-        # Clean Date/Time immediately
+
+        # 2. SAFETY CAP (CRITICAL FOR RENDER FREE TIER)
+        # 2.5 Million rows will crash 512MB RAM. 
+        # We slice the top 300k rows (usually the most recent data).
+        if len(df) > 300000:
+            print(f"Dataset too large ({len(df)} rows). Trimming to 300k for stability...", file=sys.stderr)
+            df = df.iloc[:300000].copy()
+
+        # 3. OPTIMIZE TEXT (Object -> Category)
+        # This reduces memory usage for text columns by ~80-90%
+        cat_cols = ["BOROUGH", "PERSON_INJURY", "VEHICLE TYPE CODE 1", "CONTRIBUTING FACTOR VEHICLE 1"]
+        for col in cat_cols:
+            df[col] = df[col].astype("category")
+
+        # 4. OPTIMIZE NUMBERS (float64 -> float32)
+        # Halves memory for coordinates
+        df["LATITUDE"] = df["LATITUDE"].astype("float32")
+        df["LONGITUDE"] = df["LONGITUDE"].astype("float32")
+
+        # 5. PRE-PROCESS TIME (Drop heavy strings)
+        # Extract the HOUR as a tiny integer (int8) and drop the huge string column
+        df["HOUR"] = pd.to_datetime(df["CRASH TIME"], format='%H:%M', errors='coerce').dt.hour.fillna(0).astype("int8")
+        df.drop(columns=["CRASH TIME"], inplace=True)
+
+        # 6. DATE CONVERSION
         df["CRASH DATE"] = pd.to_datetime(df["CRASH DATE"], errors="coerce")
-        print(f"Loaded {len(df)} rows successfully.", file=sys.stderr)
+        
+        print(f"Loaded {len(df)} rows successfully (Optimized Mode).", file=sys.stderr)
         return df
         
     except Exception as e:
         print(f"CRITICAL ERROR: Could not load data. {e}", file=sys.stderr)
-        print("Switching to DUMMY DATA mode to keep app alive.", file=sys.stderr)
-        
-        # Fallback: Create 5 rows of fake data so the app actually runs
+        # Fallback: Tiny dummy dataset to prevent app crash
         return pd.DataFrame({
             "BOROUGH": ["MANHATTAN", "BROOKLYN", "QUEENS", "BRONX", "MANHATTAN"],
             "CRASH DATE": pd.to_datetime(["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04", "2023-01-05"]),
-            "CRASH TIME": ["12:00", "13:00", "14:00", "15:00", "16:00"],
+            "HOUR": [12, 13, 14, 15, 16],
             "LATITUDE": [40.7128, 40.6782, 40.7282, 40.8448, 40.7580],
             "LONGITUDE": [-74.0060, -73.9442, -73.7949, -73.8648, -73.9855],
             "PERSON_INJURY": ["Injured", "Killed", "Unspecified", "Injured", "Unspecified"],
             "VEHICLE TYPE CODE 1": ["Sedan", "SUV", "Bus", "Sedan", "Taxi"],
-            "CONTRIBUTING FACTOR VEHICLE 1": ["Unspecified", "Driver Inattention", "Failure to Yield", "Unspecified", "Other"],
-            "COLLISION_ID": [1, 2, 3, 4, 5]
+            "CONTRIBUTING FACTOR VEHICLE 1": ["Unspecified", "Driver Inattention", "Failure to Yield", "Unspecified", "Other"]
         })
 
 @lru_cache(maxsize=1)
 def load_metadata():
-    # Use the safe loader to get metadata options
     df = load_data_safe()
-    
     return {
-        "boroughs": sorted(df["BOROUGH"].dropna().astype(str).unique().tolist()) if "BOROUGH" in df else [],
-        "years": sorted(df["CRASH DATE"].dt.year.dropna().astype(int).unique().tolist()) if "CRASH DATE" in df else [],
-        "vehicle_types": sorted(df["VEHICLE TYPE CODE 1"].dropna().astype(str).unique().tolist()) if "VEHICLE TYPE CODE 1" in df else [],
-        "factors": sorted(df["CONTRIBUTING FACTOR VEHICLE 1"].dropna().astype(str).unique().tolist()) if "CONTRIBUTING FACTOR VEHICLE 1" in df else [],
-        "injuries": sorted(df["PERSON_INJURY"].dropna().astype(str).unique().tolist()) if "PERSON_INJURY" in df else []
+        "boroughs": sorted(df["BOROUGH"].dropna().unique().tolist()) if "BOROUGH" in df else [],
+        "years": sorted(df["CRASH DATE"].dt.year.dropna().unique().tolist()) if "CRASH DATE" in df else [],
+        "vehicle_types": sorted(df["VEHICLE TYPE CODE 1"].dropna().unique().tolist()) if "VEHICLE TYPE CODE 1" in df else [],
+        "factors": sorted(df["CONTRIBUTING FACTOR VEHICLE 1"].dropna().unique().tolist()) if "CONTRIBUTING FACTOR VEHICLE 1" in df else [],
+        "injuries": sorted(df["PERSON_INJURY"].dropna().unique().tolist()) if "PERSON_INJURY" in df else []
     }
 
 def apply_filters(df, boroughs, years, vehicles, factors, injuries):
@@ -126,7 +147,7 @@ app.layout = dbc.Container([
 ], fluid=True)
 
 # ============================================================
-# 3. COMBINED CALLBACK (NO DCC.STORE)
+# 3. COMBINED CALLBACK
 # ============================================================
 
 @app.callback(
@@ -173,19 +194,24 @@ def update_dashboard(n_clicks, boroughs, years, vehicles, injuries):
     ts = filtered.set_index("CRASH DATE").resample("ME").size()
     line = create_fig(px.line(ts), "Trend Over Time")
 
-    # 4. Heatmap
-    if "CRASH TIME" in filtered:
-        heat_df = filtered.copy()
-        heat_df["HOUR"] = pd.to_datetime(heat_df["CRASH TIME"], format='%H:%M', errors="coerce").dt.hour
+    # 4. Heatmap (UPDATED FOR OPTIMIZED 'HOUR' COLUMN)
+    if "HOUR" in filtered:
+        heat_df = filtered[["HOUR", "CRASH DATE"]].copy()
         heat_df["DAY"] = heat_df["CRASH DATE"].dt.day_name()
+        
+        # Create pivot table
         pivot = heat_df.pivot_table(index="HOUR", columns="DAY", aggfunc="size", fill_value=0)
+        
+        # Reindex to ensure all 24 hours show up even if data is missing
+        pivot = pivot.reindex(index=range(24), fill_value=0)
+        
         heat = create_fig(px.imshow(pivot), "Time Heatmap")
     else: heat = empty
 
     # 5. Map (Sampled)
     if "LATITUDE" in filtered:
         map_df = filtered.dropna(subset=["LATITUDE", "LONGITUDE"])
-        if len(map_df) > 1000: map_df = map_df.sample(1000) # Heavy sampling for speed
+        if len(map_df) > 1000: map_df = map_df.sample(1000) # Keep map fast
         map_fig = px.scatter_mapbox(map_df, lat="LATITUDE", lon="LONGITUDE", zoom=10, mapbox_style="carto-darkmatter")
         map_fig = create_fig(map_fig, "Crash Locations")
         map_fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
